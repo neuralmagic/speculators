@@ -34,7 +34,7 @@ Before you begin, ensure you have the following installed:
 To install the required dependencies for the package and development, run:
 
 ```bash
-pip install -e ./[dev]
+pip install -e "./[dev]"
 ```
 
 The `-e` flag installs the package in editable mode, allowing you to make changes to the code without reinstalling it. The `[dev]` part installs additional dependencies needed for development, such as testing and linting tools.

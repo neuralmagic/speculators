@@ -1,0 +1,6 @@
+
+
+def save_speculator():
+    """
+    """
+    

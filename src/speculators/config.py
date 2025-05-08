@@ -61,9 +61,9 @@ class TokenProposalConfig(BaseModel):
             "This must be a valid proposer from the speculators library."
         )
     )
-    args: dict[str, Any] = Field(
+    args: dict[str, Any] = Field(  # TODO: Each proposal define these extra arguments, (registry)
         description=(
-            "Additional arguments for the verification criterion. "
+            "Additional arguments for the proposal criterion. "
             "These can include hyperparameters, configuration settings, etc."
         )
     )
