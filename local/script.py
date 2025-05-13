@@ -4,7 +4,8 @@ import torch
 # https://github.com/SafeAILab/EAGLE
 
 class DraftModel:
-    """"""
+    """
+    """
 class VerifierModel:
     pass
 

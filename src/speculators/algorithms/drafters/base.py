@@ -1,14 +1,20 @@
 
-
+from torch import nn
 class DraftModel:
     """
     Base class for all draft models.
 
     Will be used for potentially modifying the drafter model
-    """
 
+    # TODO: Needs to be a Torch Module
+    # The init function needs to be to accept config,
+    # accordingly initialize the module
+
+    # Could 
+    """
+    model: nn.Module
     head = None
-    body = None
+    body = None 
 
     def modify_drafter(self, *args, **kwargs):
         """
