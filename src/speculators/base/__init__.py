@@ -4,6 +4,8 @@ from .config import (
     TokenProposalConfig,
     VerifierConfig,
     speculators_config_version,
+    DraftModelType,
+    TokenProposalType,
 )
 from .objects import Drafter, SpeculatorModel, TokenProposal
 
@@ -16,4 +18,6 @@ __all__ = [
     "TokenProposalConfig",
     "VerifierConfig",
     "speculators_config_version",
+    "DraftModelType",
+    "TokenProposalType",
 ]
