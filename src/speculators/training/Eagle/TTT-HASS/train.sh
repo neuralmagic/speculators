@@ -1,12 +1,13 @@
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch -m --multi_gpu --mixed_precision=bf16 --main_process_port 29501 train.main_train \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch -m --multi_gpu --mixed_precision=bf16 --main_process_port 29501 train.main_trainGrad \
     --basepath train/llama3-1 \
     --tmpdir /tmpdata/megan/3_1_8B \
-    --cpdir layerNormOnBigDataKL00_v00 \
+    --cpdir GradProp \
     --configpath train/llama3_8_B.json \
-    --epoch 3 \
+    --epoch 4 \
     --bs 2 \
     --topk_w 0 \
     --topk 1 \
+    --lr 8e-5 \
     --forward_num_total 3 \
 
 
