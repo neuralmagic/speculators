@@ -2,7 +2,7 @@
 #Which is a fork of the Eagle repository: https://github.com/SafeAILab/EAGLE (arxiv: https://arxiv.org/abs/2401.15077)
 #It has been modified to speed up the training function by using dot products instead of attention masks when running forward passes. 
 #And to use Llama 3 instead of Llama 2, along with a few other experiments.  
-
+#And to use hidden states as the cache instead of k and v 
 import os
 import random
 import numpy as np
