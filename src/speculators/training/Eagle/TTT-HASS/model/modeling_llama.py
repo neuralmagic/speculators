@@ -217,27 +217,26 @@ import time
 def eager_attention_forward_train(
     module: nn.Module,
     query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
+    key_cache: torch.Tensor,
+    value_cache: torch.Tensor,
     attention_mask: Optional[torch.Tensor],
     scaling: float,
     dropout: float = 0.0,
     **kwargs,
 ):
 
-    module.k_cache.append(key)
-    module.v_cache.append(value)
-    key_states_orig=repeat_kv(module.k_cache[0], module.num_key_value_groups)
-    value_states_orig=repeat_kv(module.v_cache[0], module.num_key_value_groups)
+    module.k_cache
+    key_states_orig=repeat_kv(key_cache[0], module.num_key_value_groups)
+    value_states_orig=repeat_kv(value_cache[0], module.num_key_value_groups)
     attn_weights=torch.matmul(query, key_states_orig.transpose(2,3))*scaling
-    attn_weights=torch.tril(attn_weights, diagonal=-1*len(module.k_cache)+1 )
+    attn_weights=torch.tril(attn_weights, diagonal=-1*len(key_cache)+1 )
 
     start=time.time()
 
-    for i in range(1, len(module.k_cache)):
-        key_states=repeat_kv(module.k_cache[i], module.num_key_value_groups)
+    for i in range(1, len(key_cache)):
+        key_states=repeat_kv(key_cache[i], module.num_key_value_groups)
         dot=torch.sum(key_states*query, dim=-1)
-        offset=len(module.k_cache)-1-i
+        offset=len(key_cache)-1-i
         base=torch.ones(attn_weights.shape[-1]-offset, device=key_states_orig.device)
         base=torch.diag(base, diagonal=-1*offset)
 
@@ -252,11 +251,11 @@ def eager_attention_forward_train(
     
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
-    attn_output = torch.matmul(torch.tril(attn_weights, diagonal=-1*len(module.k_cache)+1), value_states_orig)
+    attn_output = torch.matmul(torch.tril(attn_weights, diagonal=-1*len(key_cache)+1), value_states_orig)
 
-    for i in range(1, len(module.k_cache)):
-        v_i=repeat_kv(module.v_cache[i], module.num_key_value_groups)
-        offset=len(module.k_cache)-1-i
+    for i in range(1, len(key_cache)):
+        v_i=repeat_kv(value_cache[i], module.num_key_value_groups)
+        offset=len(key_cache)-1-i
         coeff=torch.diagonal(attn_weights, offset=-1*offset, dim1=-2, dim2=-1)
         holder=torch.zeros(v_i.shape[:-1], device=v_i.device)
         holder[:,:,offset:]=coeff
@@ -264,10 +263,7 @@ def eager_attention_forward_train(
 
 
     attn_output = attn_output.transpose(1, 2).contiguous()
-    module.k_cache[-1]=module.k_cache[-1].clone().detach()
-    module.v_cache[-1]=module.v_cache[-1].clone().detach()
     return attn_output, attn_weights
-
 
 
 class LlamaAttention(nn.Module):
@@ -303,6 +299,7 @@ class LlamaAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+        past_hidden_states: Optional[[torch.Tensor]],
         attention_mask: Optional[torch.Tensor],
         past_key_value: Optional[Cache] = None,
         cache_position: Optional[torch.LongTensor] = None,
@@ -311,12 +308,27 @@ class LlamaAttention(nn.Module):
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
+
         query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
         key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        
 
+        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        
         cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+
+        key_cache=[]
+        value_cache=[]
+
+        for past_hidden_state in past_hidden_states:
+            key_cache.append(self.k_proj(past_hidden_state).view(hidden_shape).transpose(1, 2))
+            _, key_cache[-1]=apply_rotary_pos_emb(query_states, key_cache[-1], cos, sin)
+            value_cache.append(self.v_proj(past_hidden_state).view(hidden_shape).transpose(1, 2))
+
+        key_cache.append(key_states)
+        value_cache.append(value_states)
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
@@ -338,8 +350,8 @@ class LlamaAttention(nn.Module):
         attn_output, attn_weights = attention_interface(
             self,
             query_states,
-            key_states,
-            value_states,
+            key_cache,
+            value_cache,
             attention_mask,
             dropout=0.0 if not self.training else self.attention_dropout,
             scaling=self.scaling,
@@ -367,6 +379,7 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
+        past_hidden_states=None,
         past_key_value: Optional[Cache] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
@@ -375,7 +388,7 @@ class LlamaDecoderLayer(nn.Module):
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         residual = hidden_states
-
+        #this gets overridden anyways... 
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
@@ -383,6 +396,7 @@ class LlamaDecoderLayer(nn.Module):
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
+            past_hidden_states=past_hidden_states,
             past_key_value=past_key_value,
             output_attentions=output_attentions,
             use_cache=use_cache,
