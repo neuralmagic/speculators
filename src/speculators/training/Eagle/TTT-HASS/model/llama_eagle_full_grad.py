@@ -37,7 +37,7 @@ from torch import nn
 
 from transformers.activations import ACT2FN
 
-from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRotaryEmbedding, LlamaRMSNorm
+from model.modeling_llama_TTT import LlamaDecoderLayer, LlamaRotaryEmbedding, LlamaRMSNorm
 try:
     from .configs import EConfig
     from .utils_c import *

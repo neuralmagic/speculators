@@ -103,7 +103,7 @@ accelerator = Accelerator(mixed_precision='bf16',
                           gradient_accumulation_steps=train_config["gradient_accumulation_steps"])
 # from model.cnets_hass import Model
 # from model.updatedEagle import Model
-from model.llama_eagleProp import Model
+from model.llama_eagle_full_grad import Model
 from model.configs import EConfig
 from typing import Any, Dict, List
 
