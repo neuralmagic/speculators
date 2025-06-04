@@ -229,8 +229,12 @@ def eager_attention_forward_train(
     key_states_orig=repeat_kv(key_cache[0], module.num_key_value_groups)
     value_states_orig=repeat_kv(value_cache[0], module.num_key_value_groups)
     attn_weights=torch.matmul(query, key_states_orig.transpose(2,3))*scaling
+    # print(scaling)
     attn_weights=torch.tril(attn_weights, diagonal=-1*len(key_cache)+1 )
-
+    # print(attn_weights)
+    # print(attn_weights.shape)
+    # print(attn_weights[0,0,:5, :5])
+    # # print(attn_weights[0,0,:,:])
     start=time.time()
 
     for i in range(1, len(key_cache)):
@@ -242,6 +246,7 @@ def eager_attention_forward_train(
 
         base=base.unsqueeze(0).repeat(attn_weights.shape[0],attn_weights.shape[1], 1, 1)
         base=base*dot[:,:, :,None]
+        # print(base[0,0,:5, :5])
         attn_weights+=(base*scaling)
 
     
@@ -280,13 +285,13 @@ class LlamaAttention(nn.Module):
         self.is_causal = True
 
         self.q_proj = nn.Linear(
-            config.hidden_size, config.num_attention_heads * self.head_dim, bias=config.attention_bias
+            config.hidden_size*2, config.num_attention_heads * self.head_dim, bias=config.attention_bias
         )
         self.k_proj = nn.Linear(
-            config.hidden_size, config.num_key_value_heads * self.head_dim, bias=config.attention_bias
+            config.hidden_size*2, config.num_key_value_heads * self.head_dim, bias=config.attention_bias
         )
         self.v_proj = nn.Linear(
-            config.hidden_size, config.num_key_value_heads * self.head_dim, bias=config.attention_bias
+            config.hidden_size*2, config.num_key_value_heads * self.head_dim, bias=config.attention_bias
         )
         self.o_proj = nn.Linear(
             config.num_attention_heads * self.head_dim, config.hidden_size, bias=config.attention_bias
@@ -387,9 +392,9 @@ class LlamaDecoderLayer(nn.Module):
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
-        residual = hidden_states
+        residual = hidden_states[:,:,hidden_states.shape[2]//2:]
         #this gets overridden anyways... 
-        hidden_states = self.input_layernorm(hidden_states)
+        # hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
         hidden_states, self_attn_weights = self.self_attn(
@@ -404,6 +409,7 @@ class LlamaDecoderLayer(nn.Module):
             position_embeddings=position_embeddings,
             **kwargs,
         )
+
         hidden_states = residual + hidden_states
 
         # Fully Connected

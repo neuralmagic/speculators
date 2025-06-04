@@ -31,7 +31,7 @@ def build_dataset_rank(
         select=None,
 ):
 
-    ds =load_dataset('HuggingFaceH4/ultrachat_200k', split='train_gen')
+    ds =load_dataset('HuggingFaceH4/ultrachat_200k', split='train_sft')
     ds1 = ds.select(range(args.start, args.end))
     num_proc = 4
 
@@ -120,13 +120,21 @@ bigmodel.eval()
 @torch.no_grad()
 def ge(data):
     input_ids=data["input_ids"]
+    num_layers=(len(bigmodel.model.layers))
     outs_big = bigmodel(input_ids.cuda(), output_hidden_states=True)
-    hidden_state_big = outs_big.hidden_states[-1]
+    # hidden_state_big = outs_big.hidden_states[-1]
+    featureFusion=[outs_big.hidden_states[3],outs_big.hidden_states[num_layers//2+1],outs_big.hidden_states[-3]]
+    hidden_state_big=torch.cat(featureFusion, dim=-1)
+    target=outs_big.hidden_states[-1]
     max_prob_tokens_big = torch.argmax(outs_big.logits, dim=-1)
     probs = torch.softmax(outs_big.logits, dim=-1)
     maxp=probs[0].max(dim=1).values
-    td={"input_ids":input_ids.cpu()[0],"hidden_state":hidden_state_big.cpu()[0],"loss_mask":data["loss_mask"].cpu()[0]}
+    td={"input_ids":input_ids.cpu()[0],"hidden_state":hidden_state_big.cpu()[0],"loss_mask":data["loss_mask"].cpu()[0], "target":target.cpu()[0]}
     return td
+
+outdir = f'{args.outdir}/{args.index}'
+if not os.path.exists(outdir):
+    os.makedirs(outdir)
 
 outdir = f'{args.outdir}/{args.index}'
 if not os.path.exists(outdir):
