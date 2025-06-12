@@ -13,7 +13,6 @@ parser.add_argument('--gpu_index', type=int, nargs='+', default=[0])
 parser.add_argument('--outdir', type=str, default='outdir0')
 parser.add_argument('--data_path', type=str, default='0')
 parser.add_argument('--model_path', type=str, default='0')
-parser.add_argument('--split', type=str, default='sft')
 args = parser.parse_args()
 import os
 
@@ -32,7 +31,7 @@ def build_dataset_rank(
         select=None,
 ):
 
-    ds =load_dataset('HuggingFaceH4/ultrachat_200k', split='train_{}'.format(args.split))
+    ds =load_dataset('HuggingFaceH4/ultrachat_200k', split='train_sft')
     ds1 = ds.select(range(args.start, args.end))
     num_proc = 4
 

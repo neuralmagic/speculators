@@ -1,8 +1,7 @@
 #This file is adapted from https://github.com/HArmonizedSS/HASS (arxiv: https://arxiv.org/abs/2408.15766)
 #Which is a fork of the Eagle repository: https://github.com/SafeAILab/EAGLE (arxiv: https://arxiv.org/abs/2401.15077)
-#It has been modified to speed up the training function by using dot products instead of attention masks when running forward passes. 
-#And to use Llama 3 instead of Llama 2, along with a few other experiments.  
-#And to use hidden states as the cache instead of k and v 
+
+
 import os
 import random
 import numpy as np
@@ -39,21 +38,8 @@ import gc
 args = parser.parse_args()
 
 
-def list_files(path):
-    datapath = []
-    for root, directories, files in os.walk(path):
-        for file in files:
-            file_path = os.path.join(root, file)
-            datapath.append(file_path)
-    return datapath
-
-datapath = list_files(args.tmpdir)
-
-
-data_num=len(datapath)
-print("training on {} examples total".format(data_num))
 trainFrac=1.0
-total_steps = int(data_num * trainFrac * (args.epoch + 1) / (args.bs * args.gradient_accumulation_steps))
+total_steps = int(args.data_num * trainFrac * (args.epoch + 1) / (args.bs * args.gradient_accumulation_steps))
 warm_steps = total_steps // 100
 
 train_config = {
@@ -66,9 +52,8 @@ train_config = {
     # Depending on your data and model size, the larger the model, the higher the sample efficiency. We recommend setting it between 20-40.
     "num_warmup_steps": warm_steps,
     "total_steps": total_steps,
-    "p_w": 0.0,
-    "v_w": 0.0,
-    'kldiv_w':1.0,
+    "p_w": 0.1,
+    "v_w": 1.0,
     "topk_w": args.topk_w,
     "head_w": 0.1,
     "num_workers": 8,
@@ -90,6 +75,7 @@ train_config = {
 import json
 from safetensors import safe_open
 import safetensors
+# from transformers import AutoModelForCausalLM, AutoTokenizer,AutoModelForSequenceClassification
 import os
 import torch
 
@@ -100,13 +86,16 @@ from accelerate.utils import set_seed
 set_seed(0)
 accelerator = Accelerator(mixed_precision='bf16',
                           gradient_accumulation_steps=train_config["gradient_accumulation_steps"])
-from model.llama_eagle3_full_grad import Model
+# from model.cnets_hass import Model
+# from model.updatedEagle import Model
+from model.llama_eagle import Model
 from model.configs import EConfig
 from typing import Any, Dict, List
 
 from torch import nn, optim
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+# import accelerate
 import numpy as np
 from transformers import get_linear_schedule_with_warmup, AutoConfig
 
@@ -143,8 +132,13 @@ head.eval()
 for param in head.parameters():
     param.requires_grad = False
 
-
-
+def list_files(path):
+    datapath = []
+    for root, directories, files in os.walk(path):
+        for file in files:
+            file_path = os.path.join(root, file)
+            datapath.append(file_path)
+    return datapath
 
 
 class AddGaussianNoise:
@@ -197,7 +191,7 @@ class CustomDataset(Dataset):
         hidden_state = data['hidden_state'][:train_config["max_len"]][None, :]
         input_ids = data['input_ids'][:train_config["max_len"]][None, :]
         loss_mask =data["loss_mask"][:train_config["max_len"]][None, :]
-        target=data['target'][:train_config["max_len"]][None, :]
+
 
         length = hidden_state.shape[1]
         attention_mask = [1] * length
@@ -208,7 +202,7 @@ class CustomDataset(Dataset):
         zeropadding = torch.tensor([[0]])
         input_ids_target = torch.cat((input_ids_target, zeropadding), dim=1)
 
-        target =target[:, 1:, :]
+        target = hidden_state[:, 1:, :]
         zeropadding = torch.zeros(1, 1, target.shape[2])
         target = torch.cat((target, zeropadding), dim=1)
         loss_mask[-1] = 0
@@ -281,22 +275,11 @@ def top_accuracy(output, target, topk=(1,)):
             res.append(correct_k)
         return res
 
-def compute_loss(target, target_p, predict, loss_mask, forward_idx=0):
+def compute_loss(target, target_p, predict, loss_mask):
     out_head = head(predict)
     out_logp = nn.LogSoftmax(dim=2)(out_head)
-    # print(torch.argmax(out_logp, dim=-1))
-    # print(torch.argmax(target_p, dim=-1))
-    
-    out=torch.argmax(out_logp, dim=-1)
-    labels=torch.argmax(target_p, dim=-1)
 
-    correct=out==labels
-
-    accuracy=(loss_mask[:,:,0]*correct).sum()/loss_mask.sum()
-
-    # print("forward {} acc {}".format(forward_idx, accuracy))
     plogp = target_p * out_logp
-    
     ploss = -torch.sum(torch.sum(loss_mask * plogp, 2)) / (loss_mask.sum() + 1e-5)
     
     vloss = criterion(predict, target)
@@ -306,9 +289,61 @@ def compute_loss(target, target_p, predict, loss_mask, forward_idx=0):
     topk_mask = torch.topk(target_p, k=args.topk, dim=2).indices
     topk_loss = -torch.sum(torch.sum(loss_mask * plogp.gather(dim=2, index=topk_mask), 2)) / (loss_mask.sum() + 1e-5)
 
-    kldiv_loss=kldiv(out_logp, target_p)
-    kldiv_loss=torch.sum(torch.sum(loss_mask*kldiv_loss, 2)) / (loss_mask.sum()+1e-5)
-    return vloss, ploss, topk_loss, out_head, kldiv_loss
+    return vloss, ploss, topk_loss, out_head
+
+@torch.no_grad()
+def getkacc(model, data, head, max_length=5):
+    def generate(hidden_states, input_ids, head, max_length=4, use_cache=True):
+        if use_cache:
+            past_key_values = None
+            for i in range(max_length):
+                if past_key_values != None:
+                    out_hidden, past_key_values = model(last_hidden, input_ids=token, past_key_values=past_key_values,
+                                                        use_cache=True)
+                else:
+                    out_hidden, past_key_values = model(hidden_states, input_ids=input_ids, use_cache=True)
+                last_hidden = out_hidden[:, -1:]
+                last_headout = head(last_hidden)
+                token = torch.argmax(last_headout, dim=-1)
+                input_ids = torch.cat((input_ids, token), dim=1)
+
+        else:
+            raise NotImplementedError
+
+        return input_ids
+
+    hidden_states = data["hidden_states"]
+    input_ids = data["input_ids"]
+    loss_mask = data["loss_mask"]
+    target = data["target"]
+    total = [0 for _ in range(max_length)]
+    correct = [0 for _ in range(max_length)]
+    bs, seq_len = hidden_states.shape[0], hidden_states.shape[1]
+    target_headout = head(target)
+    target_ids = target_headout.argmax(dim=2)
+    for pre_len in range(1, seq_len):
+        if loss_mask[:, pre_len].sum() == 0:
+            continue
+        pre_hidden_states = hidden_states[:, :pre_len]
+        pre_input_ids = input_ids[:, :pre_len]
+        outs = generate(pre_hidden_states, pre_input_ids, head, max_length=max_length)
+        generate_ids = outs[:, pre_len:]
+        for bid in range(bs):
+            for k in range(max_length):
+                if loss_mask[bid, pre_len + k] == 0:
+                    break
+                if pre_len + k >= seq_len:
+                    break
+                total[k] += 1
+                if generate_ids[bid, k] == target_ids[bid, pre_len + k - 1]:
+                    correct[k] += 1
+                else:
+                    for kk in range(k + 1, max_length):
+                        total[kk] += 1
+                    break
+
+    acc = [correct[i] / total[i] for i in range(len(correct))]
+    return acc
 
 
 if train_config["data_noise"]:
@@ -319,6 +354,7 @@ if train_config["data_noise"]:
 else:
     aug = None
 
+datapath = list_files(train_config["datapath"])
 
 traindatapath = datapath[:int(len(datapath) * trainFrac)]
 testdatapath = datapath[int(len(datapath) * trainFrac):]
@@ -350,7 +386,7 @@ if args.ckpt_path is not None:
     print(f"load model from {load_model_path}")
 
 
-kldiv=nn.KLDivLoss(reduction="none")
+
 criterion = nn.SmoothL1Loss(reduction="none")
 optimizer = optim.AdamW(model.parameters(), lr=train_config["lr"], betas=(train_config["b1"], train_config["b2"]))
 
@@ -375,6 +411,31 @@ else:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ##MAIN TRAINING LOOP
 for epoch in range(num_epochs + 1):
 
@@ -384,39 +445,41 @@ for epoch in range(num_epochs + 1):
     epoch_loss = 0
     num_batches = 0
     model.train()
-    forward_num_total=forwards[epoch]
-    for batch_idx, data in enumerate(tqdm(train_loader,dynamic_ncols=True )):
+
+    for batch_idx, data in enumerate(tqdm(train_loader)):
         with accelerator.accumulate(model):
             optimizer.zero_grad()
             hidden_states, input_ids, attention_mask, target, loss_mask = data["hidden_states"], data["input_ids"], data["attention_mask"], data["target"], data["loss_mask"][..., None]
             loss = 0
+
+
+
             with torch.no_grad():
                 target_head = head(target)
                 target_p = nn.Softmax(dim=2)(target_head)
                 target_p = target_p.detach()
-            hidden_states_history=[]
 
-            hidden_states_fc=model.module.fc(hidden_states).detach()
-            weights=0
+
+# clear up to here.  
+
             for forward_idx in range(args.forward_num_total):
-                predict = model(hidden_states, input_ids, attention_mask, hidden_states_history)
-                pred=model.module.lm_head_layernorm(predict)
-                vloss, ploss, topk_loss, out_head , kldiv_loss = compute_loss(target, target_p, pred, loss_mask, forward_idx)
-                total_loss = train_config["v_w"] * vloss + train_config["p_w"] * ploss  + train_config['kldiv_w']*kldiv_loss
+
+                predict = model(hidden_states, input_ids, attention_mask)
+
+            
+                vloss, ploss, topk_loss, out_head = compute_loss(target, target_p, predict, loss_mask)
+                total_loss = train_config["v_w"] * vloss + train_config["p_w"] * ploss + train_config["topk_w"] * topk_loss
                 loss += total_loss
                 accelerator.backward(total_loss)
-                hidden_states_history.append(hidden_states.detach())
-                if forward_idx==0:
-                    hidden_states=torch.concat([hidden_states_fc[:, :1, :], predict[:, :-1, :].detach()], dim=1)
-                else:
-                    hidden_states=torch.concat([hidden_states.detach()[:,:1, :],predict[:, :-1, :].detach()], dim=1)
+
 
             torch.cuda.empty_cache()
+
             accelerator.clip_grad_value_(model.parameters(), train_config["grad_clip"])
             optimizer.step()
             optimizer.zero_grad()
 
-            loss /= weights
+            loss /= args.forward_num_total
             if is_warmup:
                 scheduler.step()
 

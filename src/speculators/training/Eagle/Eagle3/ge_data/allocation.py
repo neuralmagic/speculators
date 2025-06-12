@@ -9,21 +9,20 @@ parser = argparse.ArgumentParser(description='sp')
 parser.add_argument('--outdir', type=str, default='0')
 parser.add_argument('--data_path', type=str, default='0')
 parser.add_argument('--model_path', type=str, default='0')
-parser.add_argument('--dataset', type=str, default='ultrachat')
-parser.add_argument('--total_gpus', type=int, default=8)
-parser.add_argument('--gpu_per_model', type=int, default=1)
-parser.add_argument('--samples', type=int, default=68000)
-parser.add_argument('--split', type=str, default="sft")
 args = parser.parse_args()
 
 import os
 from concurrent.futures import ThreadPoolExecutor
 
+# s = 8400*4
 s=0
-e = args.samples
-gpus=[[i+j for j in range(args.gpus_per_model)] for i in range (0, args.total_gpus, args.gpus_per_model)]
-
-
+e = 200000 - 1
+# e = 68000 - 1
+# e=68
+gpus = [[0],[1],[2],[3],[4],[5],[6],[7]]
+# gpus = [[0,1],[2,3],[4,5],[6,7]]
+# gpus=[[0,1]]
+# gpus=[[0]]
 num_p = len(gpus)
 outdir = args.outdir
 
@@ -65,8 +64,8 @@ for i in range(num_p):
     gpu_index = gpus[i]
     gpu_index_str = ' '.join(map(str, gpu_index))
     # gpu_index_str='['+gpu_index_str+']'
-    command = "python ge_data/{}.py --start={} --end={} --index={} --gpu_index {} --outdir {} --data_path {} --model_path {} --split {}".format(args.dataset, start, end, index,
-                                                                                                gpu_index_str, outdir, args.data_path, args.model_path, args.split)
+    command = "python ge_data/ultrachat.py --start={} --end={} --index={} --gpu_index {} --outdir {} --data_path {} --model_path {}".format(start, end, index,
+                                                                                                gpu_index_str, outdir, args.data_path, args.model_path)
     commands.append(command)
 
 with ThreadPoolExecutor(max_workers=len(commands)) as executor:

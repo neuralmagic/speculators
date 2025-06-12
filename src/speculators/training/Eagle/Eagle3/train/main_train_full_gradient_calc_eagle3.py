@@ -90,6 +90,7 @@ train_config = {
 import json
 from safetensors import safe_open
 import safetensors
+# from transformers import AutoModelForCausalLM, AutoTokenizer,AutoModelForSequenceClassification
 import os
 import torch
 
@@ -100,6 +101,8 @@ from accelerate.utils import set_seed
 set_seed(0)
 accelerator = Accelerator(mixed_precision='bf16',
                           gradient_accumulation_steps=train_config["gradient_accumulation_steps"])
+# from model.cnets_hass import Model
+# from model.updatedEagle import Model
 from model.llama_eagle3_full_grad import Model
 from model.configs import EConfig
 from typing import Any, Dict, List
@@ -107,6 +110,7 @@ from typing import Any, Dict, List
 from torch import nn, optim
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+# import accelerate
 import numpy as np
 from transformers import get_linear_schedule_with_warmup, AutoConfig
 
@@ -142,9 +146,13 @@ head.eval()
 
 for param in head.parameters():
     param.requires_grad = False
+from copy import deepcopy
 
-
-
+newHead=deepcopy(head)
+newHead.train()
+for param in newHead.parameters():
+    param.requires_grad = True
+newHead.train()
 
 
 class AddGaussianNoise:
@@ -282,11 +290,9 @@ def top_accuracy(output, target, topk=(1,)):
         return res
 
 def compute_loss(target, target_p, predict, loss_mask, forward_idx=0):
-    out_head = head(predict)
+    out_head = newHead(predict)
     out_logp = nn.LogSoftmax(dim=2)(out_head)
-    # print(torch.argmax(out_logp, dim=-1))
-    # print(torch.argmax(target_p, dim=-1))
-    
+
     out=torch.argmax(out_logp, dim=-1)
     labels=torch.argmax(target_p, dim=-1)
 
@@ -294,21 +300,9 @@ def compute_loss(target, target_p, predict, loss_mask, forward_idx=0):
 
     accuracy=(loss_mask[:,:,0]*correct).sum()/loss_mask.sum()
 
-    # print("forward {} acc {}".format(forward_idx, accuracy))
-    plogp = target_p * out_logp
-    
-    ploss = -torch.sum(torch.sum(loss_mask * plogp, 2)) / (loss_mask.sum() + 1e-5)
-    
-    vloss = criterion(predict, target)
-    vloss = torch.sum(torch.mean(loss_mask * vloss, 2)) / (loss_mask.sum() + 1e-5)
-
-    #this is used in the fine tuning step - hass tries to optimize for the top k tokens.  
-    topk_mask = torch.topk(target_p, k=args.topk, dim=2).indices
-    topk_loss = -torch.sum(torch.sum(loss_mask * plogp.gather(dim=2, index=topk_mask), 2)) / (loss_mask.sum() + 1e-5)
-
     kldiv_loss=kldiv(out_logp, target_p)
     kldiv_loss=torch.sum(torch.sum(loss_mask*kldiv_loss, 2)) / (loss_mask.sum()+1e-5)
-    return vloss, ploss, topk_loss, out_head, kldiv_loss
+    return out_head, kldiv_loss
 
 
 if train_config["data_noise"]:
@@ -352,7 +346,7 @@ if args.ckpt_path is not None:
 
 kldiv=nn.KLDivLoss(reduction="none")
 criterion = nn.SmoothL1Loss(reduction="none")
-optimizer = optim.AdamW(model.parameters(), lr=train_config["lr"], betas=(train_config["b1"], train_config["b2"]))
+optimizer = optim.AdamW(list(newHead.parameters())+list(model.parameters()), lr=train_config["lr"], betas=(train_config["b1"], train_config["b2"]))
 
 num_epochs = train_config["num_epochs"]
 num_warmup_steps = train_config["num_warmup_steps"]
@@ -363,12 +357,12 @@ if is_warmup:
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=num_warmup_steps,
                                                 num_training_steps=total_steps)
 
-    model, head, optimizer, train_loader, test_loader, scheduler = accelerator.prepare(
-        model, head, optimizer, train_loader, test_loader, scheduler
+    model, newHead,head, optimizer, train_loader, test_loader, scheduler = accelerator.prepare(
+        model, newHead,head, optimizer, train_loader, test_loader, scheduler
     )
 else:
-    model, head, optimizer, train_loader, test_loader = accelerator.prepare(
-        model, head, optimizer, train_loader, test_loader
+    model, newHead,head, optimizer, train_loader, test_loader = accelerator.prepare(
+        model, newHead,head, optimizer, train_loader, test_loader
     )
 
 
@@ -384,7 +378,7 @@ for epoch in range(num_epochs + 1):
     epoch_loss = 0
     num_batches = 0
     model.train()
-    forward_num_total=forwards[epoch]
+    forward_num_total=3
     for batch_idx, data in enumerate(tqdm(train_loader,dynamic_ncols=True )):
         with accelerator.accumulate(model):
             optimizer.zero_grad()
@@ -395,28 +389,26 @@ for epoch in range(num_epochs + 1):
                 target_p = nn.Softmax(dim=2)(target_head)
                 target_p = target_p.detach()
             hidden_states_history=[]
+            inputs_history=[]
+            hidden_states=model.module.fc(hidden_states)
 
-            hidden_states_fc=model.module.fc(hidden_states).detach()
-            weights=0
-            for forward_idx in range(args.forward_num_total):
+            for forward_idx in range(forward_num_total):
                 predict = model(hidden_states, input_ids, attention_mask, hidden_states_history)
                 pred=model.module.lm_head_layernorm(predict)
-                vloss, ploss, topk_loss, out_head , kldiv_loss = compute_loss(target, target_p, pred, loss_mask, forward_idx)
-                total_loss = train_config["v_w"] * vloss + train_config["p_w"] * ploss  + train_config['kldiv_w']*kldiv_loss
+                out_head , kldiv_loss = compute_loss(target, target_p, pred, loss_mask, forward_idx)
+                total_loss = train_config['kldiv_w']*kldiv_loss
                 loss += total_loss
-                accelerator.backward(total_loss)
-                hidden_states_history.append(hidden_states.detach())
-                if forward_idx==0:
-                    hidden_states=torch.concat([hidden_states_fc[:, :1, :], predict[:, :-1, :].detach()], dim=1)
-                else:
-                    hidden_states=torch.concat([hidden_states.detach()[:,:1, :],predict[:, :-1, :].detach()], dim=1)
+                accelerator.backward(total_loss, retain_graph=forward_idx!=(forward_num_total-1))
+                hidden_states_history.append(hidden_states)
+                hidden_states=torch.concat([hidden_states[:, :1, :], predict[:, :-1, :]], dim=1)
+
 
             torch.cuda.empty_cache()
             accelerator.clip_grad_value_(model.parameters(), train_config["grad_clip"])
             optimizer.step()
             optimizer.zero_grad()
 
-            loss /= weights
+
             if is_warmup:
                 scheduler.step()
 
@@ -433,12 +425,11 @@ for epoch in range(num_epochs + 1):
             total += ct
             correct += cc
         if accelerator.is_main_process and ct != 0:
-            logdict = {"train/lr": optimizer.optimizer.param_groups[0]["lr"], "train/vloss": vloss.item(),
-                       "train/ploss": ploss.item(), "train/topkloss": topk_loss.item(), "train/loss": loss.item(), "train/acc": cc / ct}
+            logdict = {"train/lr": optimizer.optimizer.param_groups[0]["lr"], "train/loss": loss.item(), "train/acc": cc / ct}
             for id, i in enumerate(top_3acc):
                 logdict[f'train/top_{id + 1}_acc'] = topkacc[id].item() / ct
 
-        del ploss, vloss
+
         epoch_loss += loss.item()
         num_batches += 1
 
