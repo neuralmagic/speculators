@@ -15,7 +15,6 @@ from transformers import PretrainedConfig
 from transformers.models.llama.configuration_llama import LlamaConfig
 
 from speculators.config import SpeculatorModelConfig
-from speculators.models.transformer import TransformerSpeculatorConfig
 
 __all__ = [
     "EagleSpeculatorConfig",
@@ -23,7 +22,7 @@ __all__ = [
 
 
 @SpeculatorModelConfig.register("eagle")
-class EagleSpeculatorConfig(TransformerSpeculatorConfig):
+class EagleSpeculatorConfig(SpeculatorModelConfig):
     """
     Configuration class for EAGLE1 and HASS speculator models.
 
