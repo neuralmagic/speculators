@@ -52,9 +52,10 @@ datapath = list_files(args.tmpdir)
 
 data_num=len(datapath)
 print("training on {} examples total".format(data_num))
-trainFrac=1.0
+trainFrac=.001
 total_steps = int(data_num * trainFrac * (args.epoch + 1) / (args.bs * args.gradient_accumulation_steps))
 warm_steps = total_steps // 100
+
 
 train_config = {
     "lr": args.lr,
@@ -84,7 +85,7 @@ train_config = {
     "config_path": args.configpath,
     "b1": 0.9,
     "b2": 0.95,
-    "grad_clip": 0.5,
+    "grad_clip": 1.0,
     "save_freq": 5
 }
 import json
@@ -115,44 +116,8 @@ import numpy as np
 from transformers import get_linear_schedule_with_warmup, AutoConfig
 
 
-baseconfig = AutoConfig.from_pretrained(args.basepath)
-try:
-    head = torch.nn.Linear(baseconfig.hidden_size, baseconfig.vocab_size, bias=False)
-except:
-    head = torch.nn.Linear(baseconfig.text_config.hidden_size, baseconfig.text_config.vocab_size, bias=False)
 
-try:
-    with open(os.path.join(args.basepath, "model.safetensors.index.json"), "r") as f:
-        index_json = json.loads(f.read())
 
-        # head_path = index_json["weight_map"]["language_model.lm_head.weight"]
-        head_path = index_json["weight_map"]["lm_head.weight"]
-    with safe_open(os.path.join(args.basepath, head_path),
-                   framework="pt",
-                   device="cpu") as f:
-        # tensor_slice = f.get_slice("language_model.lm_head.weight")
-        tensor_slice = f.get_slice("lm_head.weight")
-        vocab_size, hidden_dim = tensor_slice.get_shape()
-        tensor = tensor_slice[:, :hidden_dim].float()
-except:
-    with open(os.path.join(args.basepath, "pytorch_model.bin.index.json"), "r") as f:
-        index_json = json.loads(f.read())
-        head_path = index_json["weight_map"]["lm_head.weight"]
-    weights = torch.load(os.path.join(args.basepath, head_path))
-    tensor = weights["lm_head.weight"].float()
-
-head.weight.data = tensor
-head.eval()
-
-for param in head.parameters():
-    param.requires_grad = False
-from copy import deepcopy
-
-newHead=deepcopy(head)
-newHead.train()
-for param in newHead.parameters():
-    param.requires_grad = True
-newHead.train()
 
 
 class AddGaussianNoise:
@@ -203,6 +168,8 @@ class CustomDataset(Dataset):
 
         new_data = {}
         hidden_state = data['hidden_state'][:train_config["max_len"]][None, :]
+
+
         input_ids = data['input_ids'][:train_config["max_len"]][None, :]
         loss_mask =data["loss_mask"][:train_config["max_len"]][None, :]
         target=data['target'][:train_config["max_len"]][None, :]
@@ -289,8 +256,8 @@ def top_accuracy(output, target, topk=(1,)):
             res.append(correct_k)
         return res
 
-def compute_loss(target, target_p, predict, loss_mask, forward_idx=0):
-    out_head = newHead(predict)
+def compute_loss(target, target_p, predict, loss_mask, forward_idx=0, kldiv=None):
+    out_head = predict
     out_logp = nn.LogSoftmax(dim=2)(out_head)
 
     out=torch.argmax(out_logp, dim=-1)
@@ -303,144 +270,192 @@ def compute_loss(target, target_p, predict, loss_mask, forward_idx=0):
     kldiv_loss=kldiv(out_logp, target_p)
     kldiv_loss=torch.sum(torch.sum(loss_mask*kldiv_loss, 2)) / (loss_mask.sum()+1e-5)
     return out_head, kldiv_loss
+def main():
+    baseconfig = AutoConfig.from_pretrained(args.basepath)
+    try:
+        head = torch.nn.Linear(baseconfig.hidden_size, baseconfig.vocab_size, bias=False)
+    except:
+        head = torch.nn.Linear(baseconfig.text_config.hidden_size, baseconfig.text_config.vocab_size, bias=False)
+
+    try:
+        with open(os.path.join(args.basepath, "model.safetensors.index.json"), "r") as f:
+            index_json = json.loads(f.read())
+
+            # head_path = index_json["weight_map"]["language_model.lm_head.weight"]
+            head_path = index_json["weight_map"]["lm_head.weight"]
+        with safe_open(os.path.join(args.basepath, head_path),
+                    framework="pt",
+                    device="cpu") as f:
+            # tensor_slice = f.get_slice("language_model.lm_head.weight")
+            tensor_slice = f.get_slice("lm_head.weight")
+            vocab_size, hidden_dim = tensor_slice.get_shape()
+            tensor = tensor_slice[:, :hidden_dim].float()
+    except:
+        with open(os.path.join(args.basepath, "pytorch_model.bin.index.json"), "r") as f:
+            index_json = json.loads(f.read())
+            head_path = index_json["weight_map"]["lm_head.weight"]
+        weights = torch.load(os.path.join(args.basepath, head_path))
+        tensor = weights["lm_head.weight"].float()
+
+    head.weight.data = tensor
+    head.eval()
+
+    for param in head.parameters():
+        param.requires_grad = False
+    from copy import deepcopy
 
 
-if train_config["data_noise"]:
-    if train_config["noise"] == "uniform":
-        aug = AddUniformNoise(std=train_config["std"])
+    if train_config["data_noise"]:
+        if train_config["noise"] == "uniform":
+            aug = AddUniformNoise(std=train_config["std"])
+        else:
+            aug = AddGaussianNoise(mean=train_config["mean"], std=train_config["std"])
     else:
-        aug = AddGaussianNoise(mean=train_config["mean"], std=train_config["std"])
-else:
-    aug = None
+        aug = None
 
 
-traindatapath = datapath[:int(len(datapath) * trainFrac)]
-testdatapath = datapath[int(len(datapath) * trainFrac):]
+    traindatapath = datapath[:int(len(datapath) * trainFrac)]
+    testdatapath = datapath[int(len(datapath) * trainFrac):]
 
-traindataset = CustomDataset(traindatapath, transform=aug)
+    traindataset = CustomDataset(traindatapath, transform=aug)
 
-testdataset = CustomDataset(testdatapath)
-train_loader = DataLoader(traindataset, batch_size=train_config["bs"], shuffle=True,
-                          collate_fn=DataCollatorWithPadding(), num_workers=train_config["num_workers"],
-                          pin_memory=True, drop_last=True)
-test_loader = DataLoader(testdataset, batch_size=train_config["bs"], shuffle=False,
-                         collate_fn=DataCollatorWithPadding(), num_workers=train_config["num_workers"], pin_memory=True)
-tqdm(train_loader)
-if accelerator.is_main_process:
-    if not os.path.exists(args.cpdir):
-        os.makedirs(args.cpdir)
+    testdataset = CustomDataset(testdatapath)
+    train_loader = DataLoader(traindataset, batch_size=train_config["bs"], shuffle=True,
+                            collate_fn=DataCollatorWithPadding(), num_workers=train_config["num_workers"],
+                            pin_memory=True, drop_last=True)
+    test_loader = DataLoader(testdataset, batch_size=train_config["bs"], shuffle=False,
+                            collate_fn=DataCollatorWithPadding(), num_workers=train_config["num_workers"], pin_memory=True)
+    tqdm(train_loader)
+    if accelerator.is_main_process:
+        if not os.path.exists(args.cpdir):
+            os.makedirs(args.cpdir)
 
-config = EConfig.from_pretrained(train_config["config_path"])
-model = Model(config, load_emb=True, path=args.basepath)
-if args.ckpt_path is not None: 
-    ea_model_path = args.ckpt_path
-    load_model_path=os.path.join(ea_model_path, "pytorch_model.bin")
-    if os.path.exists(load_model_path):
-        ea_layer_state_dict = torch.load(load_model_path, map_location="cuda")
+    config = EConfig.from_pretrained(train_config["config_path"])
+    model = Model(config, load_emb=True, path=args.basepath)
+
+    if args.ckpt_path is not None: 
+        ea_model_path = args.ckpt_path
+        load_model_path=os.path.join(ea_model_path, "pytorch_model.bin")
+        if os.path.exists(load_model_path):
+            ea_layer_state_dict = torch.load(load_model_path, map_location="cuda")
+        else:
+            load_model_path = os.path.join(ea_model_path, "model.safetensors")
+            ea_layer_state_dict = safetensors.torch.load_file(load_model_path)
+        model.load_state_dict(ea_layer_state_dict, strict=True)
+        print(f"load model from {load_model_path}")
+
+
+    kldiv=nn.KLDivLoss(reduction="none")
+    criterion = nn.SmoothL1Loss(reduction="none")
+    optimizer = optim.AdamW(model.parameters(), lr=train_config["lr"], betas=(train_config["b1"], train_config["b2"]))
+
+    num_epochs = train_config["num_epochs"]
+    num_warmup_steps = train_config["num_warmup_steps"]
+    total_steps = train_config["total_steps"]
+    is_warmup = train_config["is_warmup"]
+
+    if is_warmup:
+        scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=num_warmup_steps,
+                                                    num_training_steps=total_steps)
+
+        model, optimizer, train_loader, test_loader, scheduler = accelerator.prepare(
+            model, optimizer, train_loader, test_loader, scheduler
+        )
     else:
-        load_model_path = os.path.join(ea_model_path, "model.safetensors")
-        ea_layer_state_dict = safetensors.torch.load_file(load_model_path)
-    model.load_state_dict(ea_layer_state_dict, strict=True)
-    print(f"load model from {load_model_path}")
-
-
-kldiv=nn.KLDivLoss(reduction="none")
-criterion = nn.SmoothL1Loss(reduction="none")
-optimizer = optim.AdamW(list(newHead.parameters())+list(model.parameters()), lr=train_config["lr"], betas=(train_config["b1"], train_config["b2"]))
-
-num_epochs = train_config["num_epochs"]
-num_warmup_steps = train_config["num_warmup_steps"]
-total_steps = train_config["total_steps"]
-is_warmup = train_config["is_warmup"]
-
-if is_warmup:
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=num_warmup_steps,
-                                                num_training_steps=total_steps)
-
-    model, newHead,head, optimizer, train_loader, test_loader, scheduler = accelerator.prepare(
-        model, newHead,head, optimizer, train_loader, test_loader, scheduler
-    )
-else:
-    model, newHead,head, optimizer, train_loader, test_loader = accelerator.prepare(
-        model, newHead,head, optimizer, train_loader, test_loader
-    )
+        model,  optimizer, train_loader, test_loader = accelerator.prepare(
+            model, optimizer, train_loader, test_loader
+        )
 
 
 
+    head=head.to(accelerator.device)
+
+    ##MAIN TRAINING LOOP
+    for epoch in range(num_epochs + 1):
+
+        top_3acc = [0 for _ in range(3)]
+        correct = 0
+        total = 0
+        epoch_loss = 0
+        num_batches = 0
+        model.train()
+        forward_num_total=args.forward_num_total
+        for batch_idx, data in enumerate(tqdm(train_loader,dynamic_ncols=True )):
+            with accelerator.accumulate(model):
+                optimizer.zero_grad()
+                hidden_states, input_ids, attention_mask, target, loss_mask = data["hidden_states"], data["input_ids"], data["attention_mask"], data["target"], data["loss_mask"][..., None]
+                loss = 0
+                with torch.no_grad():
+                    target_head = head(target)
+                    target_p = nn.Softmax(dim=2)(target_head)
+                    target_p = target_p.detach()
+                hidden_states_history=[]
+                inputs_history=[]
+
+                hidden_states=model.module.fc(hidden_states.to(torch.bfloat16))
+
+                for forward_idx in range(forward_num_total):
+                    predict = model(hidden_states, input_ids, attention_mask, hidden_states_history)
+                    pred=model.module.lm_head_layernorm(predict)
+                    pred=model.module.lm_head(pred)
+                    out_head , kldiv_loss = compute_loss(target, target_p, pred, loss_mask, forward_idx, kldiv)
+                    total_loss = train_config['kldiv_w']*kldiv_loss
+                    loss += total_loss
+                    # accelerator.backward(total_loss, retain_graph=forward_idx!=(forward_num_total-1))
+                    hidden_states_history.append(hidden_states)
+                    hidden_states=torch.concat([hidden_states[:, :1, :], predict[:, :-1, :]], dim=1)
+
+                accelerator.backward(loss)
+                torch.cuda.empty_cache()
+                accelerator.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                optimizer.zero_grad()
 
 
-##MAIN TRAINING LOOP
-for epoch in range(num_epochs + 1):
+                if is_warmup:
+                    scheduler.step()
 
-    top_3acc = [0 for _ in range(3)]
-    correct = 0
-    total = 0
-    epoch_loss = 0
-    num_batches = 0
-    model.train()
-    forward_num_total=3
-    for batch_idx, data in enumerate(tqdm(train_loader,dynamic_ncols=True )):
-        with accelerator.accumulate(model):
-            optimizer.zero_grad()
-            hidden_states, input_ids, attention_mask, target, loss_mask = data["hidden_states"], data["input_ids"], data["attention_mask"], data["target"], data["loss_mask"][..., None]
-            loss = 0
             with torch.no_grad():
-                target_head = head(target)
-                target_p = nn.Softmax(dim=2)(target_head)
-                target_p = target_p.detach()
-            hidden_states_history=[]
-            inputs_history=[]
-            hidden_states=model.module.fc(hidden_states)
-
-            for forward_idx in range(forward_num_total):
-                predict = model(hidden_states, input_ids, attention_mask, hidden_states_history)
-                pred=model.module.lm_head_layernorm(predict)
-                out_head , kldiv_loss = compute_loss(target, target_p, pred, loss_mask, forward_idx)
-                total_loss = train_config['kldiv_w']*kldiv_loss
-                loss += total_loss
-                accelerator.backward(total_loss, retain_graph=forward_idx!=(forward_num_total-1))
-                hidden_states_history.append(hidden_states)
-                hidden_states=torch.concat([hidden_states[:, :1, :], predict[:, :-1, :]], dim=1)
-
-
-            torch.cuda.empty_cache()
-            accelerator.clip_grad_value_(model.parameters(), train_config["grad_clip"])
-            optimizer.step()
-            optimizer.zero_grad()
+                _, predicted = torch.max(out_head, 2)
+                _, target = torch.max(target_head, 2)
+                ct = loss_mask.sum().item()
+                cc = ((predicted == target) * loss_mask.squeeze()).sum().item()
+                out_head = out_head.view(-1, target_head.shape[-1])[loss_mask.view(-1) == 1]
+                target = target.view(-1)[loss_mask.view(-1) == 1]
+                topkacc = top_accuracy(out_head, target, (1, 2, 3))
+                for top_i in range(len(topkacc)):
+                    top_3acc[top_i] += topkacc[top_i]
+                total += ct
+                correct += cc
+            if accelerator.is_main_process and ct != 0:
+                logdict = {"train/lr": optimizer.optimizer.param_groups[0]["lr"], "train/loss": loss.item(), "train/acc": cc / ct}
+                for id, i in enumerate(top_3acc):
+                    logdict[f'train/top_{id + 1}_acc'] = topkacc[id].item() / ct
 
 
-            if is_warmup:
-                scheduler.step()
+            epoch_loss += loss.item()
+            num_batches += 1
 
-        with torch.no_grad():
-            _, predicted = torch.max(out_head, 2)
-            _, target = torch.max(target_head, 2)
-            ct = loss_mask.sum().item()
-            cc = ((predicted == target) * loss_mask.squeeze()).sum().item()
-            out_head = out_head.view(-1, target_head.shape[-1])[loss_mask.view(-1) == 1]
-            target = target.view(-1)[loss_mask.view(-1) == 1]
-            topkacc = top_accuracy(out_head, target, (1, 2, 3))
-            for top_i in range(len(topkacc)):
-                top_3acc[top_i] += topkacc[top_i]
-            total += ct
-            correct += cc
-        if accelerator.is_main_process and ct != 0:
-            logdict = {"train/lr": optimizer.optimizer.param_groups[0]["lr"], "train/loss": loss.item(), "train/acc": cc / ct}
-            for id, i in enumerate(top_3acc):
-                logdict[f'train/top_{id + 1}_acc'] = topkacc[id].item() / ct
+        correct, total = torch.tensor(correct).cuda(), torch.tensor(total).cuda()
+        correct, total = accelerator.gather_for_metrics((correct, total))
 
+        correct, total = correct.sum().item(), total.sum().item()
 
-        epoch_loss += loss.item()
-        num_batches += 1
+        epoch_loss /= num_batches
+        top_3acc = accelerator.gather_for_metrics(top_3acc)
+        if accelerator.is_local_main_process:
+            print('Epoch [{}/{}], Loss: {:.4f}'.format(epoch + 1, num_epochs, epoch_loss))
+            print('Train Accuracy: {:.2f}%'.format(100 * correct / total))
+            # print("saving model")
+            # print(accelerator)
 
-    correct, total = torch.tensor(correct).cuda(), torch.tensor(total).cuda()
-    correct, total = accelerator.gather_for_metrics((correct, total))
-
-    correct, total = correct.sum().item(), total.sum().item()
-
-    epoch_loss /= num_batches
-    top_3acc = accelerator.gather_for_metrics(top_3acc)
-    if accelerator.is_local_main_process:
-        print('Epoch [{}/{}], Loss: {:.4f}'.format(epoch + 1, num_epochs, epoch_loss))
-        print('Train Accuracy: {:.2f}%'.format(100 * correct / total))
-        accelerator.save_state(output_dir=f"{args.cpdir}/state_{epoch}")
+            # print("model")
+            # print(model)
+            # print(accelerator.unwrap_model(model))
+            
+            unwrapped_model=accelerator.unwrap_model(model)
+            torch.save(unwrapped_model.state_dict(), f"{args.cpdir}/model{epoch}.safetensors")
+            
+            # accelerator.save_state(output_dir=f"{args.cpdir}/state_{epoch}")
+if __name__=='__main__':
+    main()

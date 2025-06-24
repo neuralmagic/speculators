@@ -67,43 +67,67 @@ class LlamaDecoderLayer(LlamaDecoderLayer):
 
 
 class Model(nn.Module):
-    def __init__(self, config, load_emb=False, path=None, bias=False, total_tokens=63, depth=5, top_k=8, threshold=1.0):
+    def __init__(self, config, load_emb=False, path=None, bias=False, total_tokens=63,  depth=5, top_k=8, threshold=1.0):
         super().__init__()
         self.gradient_checkpointing = True
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.lm_head=nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.hidden_norm=LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.input_layernorm=LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.lm_head_layernorm=LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        # self.draft_fc=nn.Linear(config.hidden_size, config.hidden_size, bias=False)
         if load_emb:
             from safetensors import safe_open
             import json
             try:
                 with open(os.path.join(path, "model.safetensors.index.json"), "r") as f:
                     index_json = json.loads(f.read())
+                    print(index_json["weight_map"].keys())
                     emb_path = index_json["weight_map"]["model.embed_tokens.weight"]
                 with safe_open(os.path.join(path, emb_path),
                                framework="pt",
                                device="cpu") as f:
                     tensor_slice = f.get_slice("model.embed_tokens.weight")
                     vocab_size, hidden_dim = tensor_slice.get_shape()
-                    tensor = tensor_slice[:, :hidden_dim].float()
+                    tensor = tensor_slice[:, :hidden_dim].to(torch.bfloat16)
             except:
                 with open(os.path.join(path, "pytorch_model.bin.index.json"), "r") as f:
                     index_json = json.loads(f.read())
                     emb_path = index_json["weight_map"]["model.embed_tokens.weight"]
                 weights = torch.load(os.path.join(path, emb_path))
-                tensor = weights["model.embed_tokens.weight"].float()
+                tensor = weights["model.embed_tokens.weight"].to(torch.bfloat16)
             self.embed_tokens.weight.data = tensor
+
+        from safetensors import safe_open
+        import json
+        try:
+            with open(os.path.join(path, "model.safetensors.index.json"), "r") as f:
+                index_json = json.loads(f.read())
+                emb_path = index_json["weight_map"]["lm_head.weight"]
+            with safe_open(os.path.join(path, emb_path),
+                            framework="pt",
+                            device="cpu") as f:
+                tensor_slice = f.get_slice("lm_head.weight")
+                vocab_size, hidden_dim = tensor_slice.get_shape()
+                tensor = tensor_slice[:, :hidden_dim].to(torch.bfloat16)
+        except:
+            with open(os.path.join(path, "pytorch_model.bin.index.json"), "r") as f:
+                index_json = json.loads(f.read())
+                emb_path = index_json["weight_map"]["lm_head.weight"]
+            weights = torch.load(os.path.join(path, emb_path))
+            tensor = weights["lm_head.weight"].to(torch.bfloat16)
+        self.lm_head.weight.data = tensor
+
         self.top_k = top_k
         self.total_tokens = total_tokens - 1
         self.depth = depth
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
         self.threshold = math.log(threshold)
         self.layers = nn.ModuleList([LlamaDecoderLayer(config, layer_idx=index) for index in range(config.num_hidden_layers)])
-        self.fc = nn.Linear(3 * config.hidden_size, config.hidden_size, bias=bias)
+        self.fc = nn.Linear(3 * config.hidden_size, config.hidden_size, bias=bias, dtype=torch.bfloat16)
         self.act = ACT2FN[config.hidden_act]
         self.logsoftmax = nn.LogSoftmax(dim=-1)
 

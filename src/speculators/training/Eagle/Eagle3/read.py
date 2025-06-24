@@ -1,6 +1,6 @@
 from safetensors.torch import  load_file
-
-filename = "Eagle3take2B/state_5/model.safetensors" # Replace your_file.safetensors with the actual file name
+prefix="Eagle3UnlockedHeadLongExtraSteps/state_3"
+filename = prefix+"/model.safetensors" # Replace your_file.safetensors with the actual file name
 state_dict={}
 
 f=load_file(filename)
@@ -18,7 +18,7 @@ del state_dict["lm_head_layernorm.weight"]
 
 
 
-filename = "Eagle3take2B/state_5/model_1.safetensors" # Replace your_file.safetensors with the actual file name
+filename = prefix+"/model_1.safetensors" # Replace your_file.safetensors with the actual file name
 f=load_file(filename)
 for key, tensor in f.items():
     state_dict["lm_head."+key]=tensor

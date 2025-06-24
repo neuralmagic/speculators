@@ -1,15 +1,15 @@
-CUDA_VISIBLE_DEVICES=0 accelerate launch -m --multi_gpu --mixed_precision=bf16 --main_process_port 29501 train.main_train_full_gradient_calc_eagle3 \
-    --basepath train/llama3-1 \
-    --tmpdir /tmpdata/megan/FF \
-    --cpdir Eagle3UnlockedHead \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 OMP_NUM_THREADS=4 accelerate launch -m  --mixed_precision=bf16 --use_deepspeed --main_process_port  29501 --num_processes 8 train.main_train_full_gradient_calc_eagle3 \
+    --basepath ~/oldHass/train/llama3-1 \
+    --tmpdir /ibmnetwork/FF \
+    --cpdir Eagle3UnlockedHead5step \
     --configpath train/llama3_8_B.json \
-    --epoch 6 \
+    --epoch 4 \
     --bs 1 \
     --topk_w 0 \
     --topk 1 \
     --lr 8e-5 \
     --forward_num_total 5 \
-    # --ckpt_path Eagle3take2/state_5 \
+
 
 
 # CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch -m --multi_gpu --mixed_precision=bf16 --main_process_port 29501 train.main_hass \

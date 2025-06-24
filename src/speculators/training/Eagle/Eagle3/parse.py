@@ -28,6 +28,6 @@ weighted=np.sum(acceptances*tokens[:, None], axis=0)/np.sum(tokens)
 print(np.round(weighted, decimals=3))
 
 
-weighted=np.concat((np.array([1]), weighted))
+weighted=np.concatenate((np.array([1]), weighted))
 print("conditional")
 print(np.round(weighted[1:]/weighted[:-1], decimals=3),)
