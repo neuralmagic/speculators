@@ -242,7 +242,9 @@ def eager_attention_forward_train(
 
         base=base.unsqueeze(0).repeat(attn_weights.shape[0],attn_weights.shape[1], 1, 1)
         base=base*dot[:,:, :,None]
-        attn_weights+=(base*scaling)
+
+        attn_weights+=base*scaling
+
 
     
     if attention_mask is not None:

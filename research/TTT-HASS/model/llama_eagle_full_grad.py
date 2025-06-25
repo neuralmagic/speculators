@@ -41,11 +41,11 @@ from model.modeling_llama_TTT import LlamaDecoderLayer, LlamaRotaryEmbedding, Ll
 try:
     from .configs import EConfig
     from .utils_c import *
-    from .choices import *
+
 except:
     from configs import EConfig
     from utils_c import *
-    from choices import *
+
     from utils import prepare_logits_processor
 
 
@@ -83,11 +83,17 @@ class Model(nn.Module):
             try:
                 with open(os.path.join(path, "model.safetensors.index.json"), "r") as f:
                     index_json = json.loads(f.read())
-                    emb_path = index_json["weight_map"]["model.embed_tokens.weight"]
+                    try:
+                        emb_path = index_json["weight_map"]["model.embed_tokens.weight"]
+                    except:
+                        emb_path = index_json["weight_map"]["language_model.model.embed_tokens.weight"]
                 with safe_open(os.path.join(path, emb_path),
                                framework="pt",
                                device="cpu") as f:
-                    tensor_slice = f.get_slice("model.embed_tokens.weight")
+                    try:
+                        tensor_slice = f.get_slice("model.embed_tokens.weight")
+                    except:
+                        tensor_slice = f.get_slice("language_model.model.embed_tokens.weight")
                     vocab_size, hidden_dim = tensor_slice.get_shape()
                     tensor = tensor_slice[:, :hidden_dim].float()
             except:
