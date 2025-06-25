@@ -125,13 +125,17 @@ try:
     with open(os.path.join(args.basepath, "model.safetensors.index.json"), "r") as f:
         index_json = json.loads(f.read())
 
-        # head_path = index_json["weight_map"]["language_model.lm_head.weight"]
-        head_path = index_json["weight_map"]["lm_head.weight"]
+        try:
+            head_path = index_json["weight_map"]["language_model.lm_head.weight"]
+        except:
+            head_path = index_json["weight_map"]["lm_head.weight"]
     with safe_open(os.path.join(args.basepath, head_path),
                    framework="pt",
                    device="cpu") as f:
-        # tensor_slice = f.get_slice("language_model.lm_head.weight")
-        tensor_slice = f.get_slice("lm_head.weight")
+        try:
+            tensor_slice = f.get_slice("language_model.lm_head.weight")
+        except:
+            tensor_slice = f.get_slice("lm_head.weight")
         vocab_size, hidden_dim = tensor_slice.get_shape()
         tensor = tensor_slice[:, :hidden_dim].float()
 except:
