@@ -45,6 +45,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "pyyaml>=6.0.0",
+    "torch",
     "transformers",
 ]
 
@@ -93,6 +94,9 @@ homepage = "https://github.com/neuralmagic/speculators"
 source = "https://github.com/neuralmagic/speculators"
 issues = "https://github.com/neuralmagic/speculators/issues"
 
+[project.entry-points.console_scripts]
+speculators = "speculators.__main__:cli"
+
 # ************************************************
 # ********** Code Quality Tools **********
 # ************************************************
@@ -129,10 +133,10 @@ indent-style = "space"
 [tool.ruff.lint]
 ignore = [
     "PLR0913",
-    "TCH001",
+    "TC001",
     "COM812",
     "ISC001",
-    "TCH002",
+    "TC002",
     "PLW1514", # allow Path.open without encoding
     "RET505", # allow `else` blocks
     "RET506", # allow `else` blocks

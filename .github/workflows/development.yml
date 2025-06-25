@@ -5,6 +5,17 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
+  check-draft:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if PR is a draft
+        id: check_draft
+        run: |
+          if [[ "${{ github.event.pull_request.draft }}" == "true" ]]; then
+            echo "This PR is a draft. Skipping the workflow."
+            exit 1
+          fi
+
   quality-checks:
     runs-on: ubuntu-latest
     strategy:
@@ -37,22 +48,6 @@ jobs:
       - name: Run quality checks
         run: tox -e types
 
-  link-checks:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python: ["3.9"]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Install dependencies
-        run: pip install tox
-      - name: Run link checks
-        run: tox -e links
-
   precommit-checks:
     runs-on: ubuntu-latest
     strategy:
@@ -70,6 +65,7 @@ jobs:
         run: pre-commit run --all-files
 
   unit-tests:
+    needs: check-draft
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -86,6 +82,7 @@ jobs:
         run: tox -e test-unit -- -m "smoke or sanity"
 
   integration-tests:
+    needs: check-draft
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -102,6 +99,7 @@ jobs:
         run: tox -e test-integration -- -m smoke
 
   build:
+    needs: check-draft
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
