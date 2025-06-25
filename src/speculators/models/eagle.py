@@ -45,12 +45,19 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
     # Model identification
     speculators_model_type: Literal["eagle"] = "eagle"
     architectures: list[str] = Field(
-        default=["EagleSpeculator"],
+        default_factory=lambda: ["EagleSpeculator"],
         description=(
             "List of model architectures that can be used with the "
             "model pretrained weights."
         ),
     )
+
+    def __init__(self, **kwargs):
+        # Ensure architectures has a default value if not provided
+        if "architectures" not in kwargs:
+            kwargs["architectures"] = ["EagleSpeculator"]
+        super().__init__(**kwargs)
+
     transformer_layer_architecture: str = Field(
         default="LlamaDecoderLayer",
         description=(
@@ -85,7 +92,18 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
     )
 
     def to_dict(self):
-        """Convert to dictionary, handling the transformer_layer_config specially."""
+        """
+        Convert to dictionary, handling the transformer_layer_config specially.
+
+        This custom to_dict method is necessary because:
+        1. The transformer_layer_config field contains a PretrainedConfig object
+           (e.g., LlamaConfig)
+        2. PretrainedConfig objects are not JSON serializable by default
+        3. We need to convert the nested config to a dict for proper serialization
+
+        Without this method, saving the config would fail with a serialization error
+        when trying to save transformer_layer_config.
+        """
         output = super().to_dict()
         # Convert transformer_layer_config to dict if it's a PretrainedConfig
         if hasattr(self.transformer_layer_config, "to_dict"):
@@ -94,7 +112,26 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
 
     @classmethod
     def from_dict(cls, config_dict, **kwargs):
-        """Create from dictionary, handling the transformer_layer_config specially."""
+        """
+        Create from dictionary, handling the transformer_layer_config specially.
+
+        This custom from_dict method is necessary because:
+        1. When loading from a saved config.json, transformer_layer_config is a
+           plain dict
+        2. Our Pydantic model expects transformer_layer_config to be a
+           PretrainedConfig instance
+        3. We need to reconstruct the appropriate config object (e.g., LlamaConfig)
+           from the dict
+
+        Without this method, loading a saved config would fail with a validation error
+        because Pydantic cannot automatically convert a dict to a PretrainedConfig.
+
+        Example flow:
+        - Save: EagleSpeculatorConfig -> config.json with transformer_layer_config
+          as dict
+        - Load: config.json -> dict -> EagleSpeculatorConfig with LlamaConfig
+          instance
+        """
         # Convert transformer_layer_config dict to LlamaConfig if needed
         if "transformer_layer_config" in config_dict and isinstance(
             config_dict["transformer_layer_config"], dict
@@ -385,12 +422,38 @@ class EagleSpeculator(PreTrainedModel, GenerationMixin):
                 # Fall back to creating config from LlamaConfig
                 from transformers import LlamaConfig
 
+                from speculators.config import SpeculatorsConfig, VerifierConfig
+
                 llama_config = LlamaConfig.from_pretrained(
                     pretrained_model_name_or_path
                 )
                 # Ensure single layer for Eagle
                 llama_config.num_hidden_layers = 1
-                config = EagleSpeculatorConfig(transformer_layer_config=llama_config)
+
+                # Create a minimal speculators config for compatibility
+                speculators_config = SpeculatorsConfig(
+                    algorithm="eagle",
+                    proposal_methods=[],
+                    default_proposal_method="greedy",
+                    verifier=VerifierConfig(
+                        name_or_path=pretrained_model_name_or_path,
+                        architectures=["LlamaForCausalLM"],
+                        tokenizer=pretrained_model_name_or_path,
+                        vocab_size=llama_config.vocab_size,
+                        hidden_size=llama_config.hidden_size,
+                        intermediate_size=llama_config.intermediate_size,
+                        max_position_embeddings=llama_config.max_position_embeddings,
+                        bos_token_id=llama_config.bos_token_id,
+                        eos_token_id=llama_config.eos_token_id
+                        if isinstance(llama_config.eos_token_id, list)
+                        else [llama_config.eos_token_id],
+                    ),
+                )
+
+                config = EagleSpeculatorConfig(
+                    transformer_layer_config=llama_config,
+                    speculators_config=speculators_config,
+                )
 
         # Create the model
         model = cls(config)
