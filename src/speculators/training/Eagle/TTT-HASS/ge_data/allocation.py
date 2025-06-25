@@ -11,9 +11,12 @@ parser.add_argument('--data_path', type=str, default='0')
 parser.add_argument('--model_path', type=str, default='0')
 parser.add_argument('--dataset', type=str, default='ultrachat')
 parser.add_argument('--total_gpus', type=int, default=8)
-parser.add_argument('--gpu_per_model', type=int, default=1)
+parser.add_argument('--gpus_per_model', type=int, default=1)
 parser.add_argument('--samples', type=int, default=68000)
 parser.add_argument('--split', type=str, default="sft")
+parser.add_argument('--chat_template', type=str, default="llama")
+
+
 args = parser.parse_args()
 
 import os
@@ -65,8 +68,15 @@ for i in range(num_p):
     gpu_index = gpus[i]
     gpu_index_str = ' '.join(map(str, gpu_index))
     # gpu_index_str='['+gpu_index_str+']'
-    command = "python ge_data/{}.py --start={} --end={} --index={} --gpu_index {} --outdir {} --data_path {} --model_path {} --split {}".format(args.dataset, start, end, index,
+    if args.chat_template=="llama":
+        command = "python ge_data/{}.py --start={} --end={} --index={} --gpu_index {} --outdir {} --data_path {} --model_path {} --split {}".format(args.dataset, start, end, index,
                                                                                                 gpu_index_str, outdir, args.data_path, args.model_path, args.split)
+    elif args.chat_template=='mistral':
+        command = "python ge_data/{}Mistral.py --start={} --end={} --index={} --gpu_index {} --outdir {} --data_path {} --model_path {} --split {}".format(args.dataset, start, end, index,
+                                                                                                gpu_index_str, outdir, args.data_path, args.model_path, args.split)
+    else:
+        raise NotImplementedError("Only llama and mistral chat templates are supported.")
+
     commands.append(command)
 
 with ThreadPoolExecutor(max_workers=len(commands)) as executor:
