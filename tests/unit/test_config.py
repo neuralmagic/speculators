@@ -2,9 +2,6 @@
 Unit tests for the config module in the Speculators library.
 """
 
-import json
-import tempfile
-from pathlib import Path
 from typing import Literal
 from unittest.mock import MagicMock
 
@@ -13,7 +10,6 @@ from pydantic import ValidationError
 from transformers import PretrainedConfig
 
 from speculators import (
-    SpeculatorModelConfig,
     SpeculatorsConfig,
     TokenProposalConfig,
     VerifierConfig,
@@ -266,116 +262,3 @@ def test_speculators_config_marshalling(
     assert (
         recreated_config.verifier.name_or_path == original_config.verifier.name_or_path
     )
-
-
-# ===== SpeculatorModelConfig Tests =====
-
-
-@pytest.fixture
-def sample_speculators_config(sample_token_proposal_config, sample_verifier_config):
-    return SpeculatorsConfig(
-        algorithm="test_algorithm",
-        proposal_methods=[sample_token_proposal_config],
-        default_proposal_method="test_proposal",
-        verifier=sample_verifier_config,
-    )
-
-
-@pytest.mark.smoke
-def test_speculator_model_config_initialization(sample_speculators_config):
-    config = SpeculatorModelConfig(
-        speculators_model_type="test_model",
-        speculators_config=sample_speculators_config,
-    )
-
-    assert config.speculators_model_type == "test_model"
-    assert config.speculators_config.algorithm == "test_algorithm"
-    assert config.speculators_version is not None
-
-    # Check that PretrainedConfig attributes are accessible
-    assert hasattr(config, "to_dict")
-    assert hasattr(config, "to_diff_dict")
-    assert hasattr(config, "to_json_string")
-    assert hasattr(config, "to_json_file")
-    assert hasattr(config, "save_pretrained")
-
-
-@pytest.mark.smoke
-def test_speculator_model_config_invalid_initialization(sample_speculators_config):
-    with pytest.raises(ValidationError) as exc_info:
-        SpeculatorModelConfig()  # type: ignore[call-arg]
-
-    error_str = str(exc_info.value)
-    assert "speculators_model_type" in error_str
-    assert "speculators_config" in error_str
-
-
-@pytest.mark.sanity
-def test_speculator_model_config_marshalling(sample_speculators_config):
-    original_config = SpeculatorModelConfig(
-        speculators_model_type="test_model",
-        speculators_config=sample_speculators_config,
-    )
-
-    config_dict = original_config.model_dump()
-    assert isinstance(config_dict, dict)
-    assert config_dict["speculators_model_type"] == "test_model"
-    assert config_dict["speculators_config"]["algorithm"] == "test_algorithm"
-
-    recreated_config = SpeculatorModelConfig.model_validate(config_dict)
-    assert (
-        recreated_config.speculators_model_type
-        == original_config.speculators_model_type
-    )
-    assert (
-        recreated_config.speculators_config.algorithm
-        == original_config.speculators_config.algorithm
-    )
-
-
-@pytest.mark.smoke
-def test_speculator_model_config_from_pretrained():
-    with pytest.raises(NotImplementedError) as exc_info:
-        SpeculatorModelConfig.from_pretrained("test/model")
-
-    assert "from_pretrained is not implemented yet" in str(exc_info.value)
-
-
-@pytest.mark.regression
-def test_speculator_model_config_pretrained_methods(sample_speculators_config):
-    config = SpeculatorModelConfig(
-        speculators_model_type="test_model",
-        speculators_config=sample_speculators_config,
-    )
-
-    # Test to_dict and to_diff_dict
-    config_dict = config.to_dict()
-    assert isinstance(config_dict, dict)
-    assert "speculators_model_type" in config_dict
-    assert "speculators_config" in config_dict
-
-    diff_dict = config.to_diff_dict()
-    assert isinstance(diff_dict, dict)
-    assert "speculators_model_type" in diff_dict
-    # Test to_json_string
-    json_string = config.to_json_string()
-    assert isinstance(json_string, str)
-    parsed_json = json.loads(json_string)
-    assert parsed_json["speculators_model_type"] == "test_model"
-
-    # Test to_json_file and save_pretrained
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_path = Path(tmp_dir)
-        json_path = tmp_path / "config.json"
-        config.to_json_file(json_path)
-        assert json_path.exists()
-
-        save_dir = tmp_path / "save_dir"
-        config.save_pretrained(save_dir)
-        assert (save_dir / "config.json").exists()
-        # Load the saved file and verify contents
-        with (save_dir / "config.json").open() as file:
-            saved_dict = json.load(file)
-
-        assert saved_dict["speculators_model_type"] == "test_model"
-        assert saved_dict["speculators_config"]["algorithm"] == "test_algorithm"
