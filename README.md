@@ -105,11 +105,28 @@ Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-p
   </picture>
 </p>
 
-### License
+### Supported Models Architectures
+
+The following model architectures are currently supported or are planned to be supported in the short term.
+
+**Currently supported:**
+
+- Llama-3
+- Qwen3
+
+**Trained checkpoints:**
+
+- Llama-3
+- Qwen3
+- Qwen3 MoE
+- Llama-4
+- DeepSeek-R1
+
+## License
 
 Speculators is licensed under the [Apache License 2.0](https://github.com/neuralmagic/speculators/blob/main/LICENSE).
 
-### Cite
+## Cite
 
 If you find Speculators helpful in your research or projects, please consider citing it:
 
